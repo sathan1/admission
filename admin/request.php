@@ -45,12 +45,12 @@ if ($studentUserId) {
     $student = $stmt->get_result()->fetch_assoc();
     $stmt->close();
 
-    
     $documentQuery = "SELECT * FROM document WHERE documentUserId = ?";
     $docStmt = $conn->prepare($documentQuery);
     $docStmt->bind_param("i", $studentUserId);
     $docStmt->execute();
     $documentsResult = $docStmt->get_result();
+
     // Fetch preferences for the student
     $preferencesQuery = "
     SELECT p.preferenceId, p.preferenceDepartment, p.preferenceStatus 
@@ -71,7 +71,13 @@ if ($studentUserId) {
 // Handle POST actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['preference_action'])) {
+        $anyUpdates = false;
+        
         foreach ($_POST['preference_action'] as $preferenceId => $action) {
+            // Validate preference ID
+            $preferenceId = filter_var($preferenceId, FILTER_VALIDATE_INT);
+            if (!$preferenceId) continue;
+
             $preferenceStatus = match ($action) {
                 'approve' => 'success',
                 'reject' => 'rejected',
@@ -79,45 +85,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 default => null,
             };
 
-            $departmentAllocation = $_POST['department_allocation'][$preferenceId] ?? null;
+            if (!$preferenceStatus) continue;
 
-            if ($preferenceStatus === 'success' && !$departmentAllocation) {
-                $_SESSION['action_message'] = "Department allocation is required for approved preferences.";
+            $departmentAllocation = $_POST['department_allocation'][$preferenceId] ?? null;
+            $statusMessage = $_POST['status_message'][$preferenceId] ?? null;
+
+            // Validation
+            $errors = [];
+            if ($preferenceStatus === 'success' && empty($departmentAllocation)) {
+                $errors[] = "Department allocation required for approval";
+            }
+            
+            if (in_array($preferenceStatus, ['rejected', 'reset']) && empty($statusMessage)) {
+                $errors[] = "Reason required for rejection/reset";
+            }
+
+            if (!empty($errors)) {
+                $_SESSION['action_message'] = implode("<br>", $errors);
                 $_SESSION['action_status'] = 'error';
                 header("Location: " . $_SERVER['REQUEST_URI']);
                 exit();
             }
 
-            if ($preferenceStatus) {
-                $updateQuery = "UPDATE preference SET preferenceStatus = ?, department_status = ? WHERE preferenceId = ?";
-                $stmt = $conn->prepare($updateQuery);
-                $stmt->bind_param("ssi", $preferenceStatus, $departmentAllocation, $preferenceId);
-                $stmt->execute();
-                $stmt->close();
-
-                // Retrieve the department name from the preferences array
-                $departmentName = array_column($preferences, 'preferenceDepartment', 'preferenceId')[$preferenceId] ?? 'Unknown Department';
-
-                // Send status email with necessary details
+            // Update database
+            $updateQuery = "UPDATE preference SET 
+                preferenceStatus = ?, 
+                department_status = ?,
+                status_message = ?
+                WHERE preferenceId = ?";
+            
+            $stmt = $conn->prepare($updateQuery);
+            $stmt->bind_param("sssi", 
+                $preferenceStatus,
+                $preferenceStatus === 'success' ? $departmentAllocation : null,
+                $statusMessage,
+                $preferenceId
+            );
+            
+            if ($stmt->execute()) {
+                $anyUpdates = true;
+                // Send email
                 sendStatusEmail(
                     $student['userEmail'],
                     $student['studentFirstName'],
                     $student['studentLastName'],
                     $preferenceStatus,
-                    $departmentName,
-                    $departmentAllocation
+                    $preference['preferenceDepartment'],
+                    $departmentAllocation,
+                    $statusMessage
                 );
             }
+            $stmt->close();
         }
-        $_SESSION['action_message'] = "Preferences and department allocations updated successfully!";
-        $_SESSION['action_status'] = 'success';
+
+        if ($anyUpdates) {
+            $_SESSION['action_message'] = "Preferences updated successfully!";
+            $_SESSION['action_status'] = 'success';
+        }
         header("Location: " . $_SERVER['REQUEST_URI']);
         exit();
     }
 }
 
 // Function to send status email
-function sendStatusEmail($recipientEmail, $firstName, $lastName, $preferenceStatus, $departmentName, $departmentCategory = null)
+function sendStatusEmail($recipientEmail, $firstName, $lastName, $preferenceStatus, 
+                        $departmentName, $departmentCategory = null, $statusMessage = null)
 {
     $mail = new PHPMailer(true);
     try {
@@ -165,6 +197,14 @@ function sendStatusEmail($recipientEmail, $firstName, $lastName, $preferenceStat
                     </tr>";
         }
 
+        if ($statusMessage) {
+            $emailBody .= "
+                    <tr style='background: #f8f9fa;'>
+                        <td style='padding: 10px; font-weight: bold; border: 1px solid #dee2e6;'>Reason:</td>
+                        <td style='padding: 10px; border: 1px solid #dee2e6;'>{$statusMessage}</td>
+                    </tr>";
+        }
+
         $emailBody .= "
                     <tr style='background: #f8f9fa;'>
                         <td style='padding: 10px; font-weight: bold; border: 1px solid #dee2e6;'>Status:</td>
@@ -193,7 +233,6 @@ function sendStatusEmail($recipientEmail, $firstName, $lastName, $preferenceStat
 
 ob_end_flush(); // Flush the output buffer
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -203,6 +242,10 @@ ob_end_flush(); // Flush the output buffer
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
+        .reason-input {
+            transition: all 0.3s ease;
+            margin-top: 5px;
+        }
 body {
     font-family: 'Roboto', sans-serif;
     background: linear-gradient(180deg, #fdfdfd, #f8f9fc);
@@ -416,12 +459,13 @@ form {
 }
 
     </style>
+ 
 </head>
 <body>
 <?php include '../header_admin.php'; ?>
 
 <div class="container mt-4">
-    <h2>Student Request Details</h2>
+    <h2>Action page - Student</h2>
     <h4>Personal Information</h4>
     <table class="table">
         <tr><th>First Name</th><td><?= htmlspecialchars($student['studentFirstName']) ?></td></tr>
@@ -479,112 +523,123 @@ form {
 
     <h4>Preferences</h4>
     <form action="" method="POST">
-        <table class="table table-bordered">
-            <thead>
-                <tr>
-        <th>Preference Department</th>
-        <th>Status</th>
-        <th>Action</th>
-        <th>Department Allocation</th>
-
-
-                </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($preferences as $preference): ?>
+       <!-- HTML Form Section -->
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th>Department</th>
+            <th>Current Status</th>
+            <th>Action</th>
+            <th>Allocation</th>
+            <th>Reason</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php foreach ($preferences as $preference): ?>
         <tr>
             <td><?= htmlspecialchars($preference['preferenceDepartment']) ?></td>
             <td>
-                <span class="badge <?= $preference['preferenceStatus'] === 'success' ? 'badge-success' : 
-                   ($preference['preferenceStatus'] === 'rejected' ? 'badge-danger' : 
-                   ($preference['preferenceStatus'] === 'reset' ? 'badge-warning' : 'badge-secondary')) ?>">
-                   <?= ucfirst($preference['preferenceStatus']) ?>
+                <span class="badge 
+                    <?= match($preference['preferenceStatus']) {
+                        'success' => 'bg-success',
+                        'rejected' => 'bg-danger',
+                        'reset' => 'bg-warning',
+                        default => 'bg-secondary'
+                    } ?>">
+                    <?= ucfirst($preference['preferenceStatus']) ?>
                 </span>
             </td>
             <td>
-                <div>
-                    <label>
-                        <input type="radio" name="preference_action[<?= $preference['preferenceId'] ?>]" 
-                               value="approve" 
-                               onclick="updateDropdown(<?= $preference['preferenceId'] ?>, true)"> Approve
-                    </label>
-                    <label>
-                        <input type="radio" name="preference_action[<?= $preference['preferenceId'] ?>]" 
-                               value="reject" 
-                               onclick="updateDropdown(<?= $preference['preferenceId'] ?>, false)"> Reject
-                    </label>
-                    <label>
-                        <input type="radio" name="preference_action[<?= $preference['preferenceId'] ?>]" 
-                               value="reset" 
-                               onclick="updateDropdown(<?= $preference['preferenceId'] ?>, false)"> Reset
-                    </label>
+                <div class="btn-group" role="group">
+                    <input type="radio" 
+                           class="btn-check"
+                           name="preference_action[<?= $preference['preferenceId'] ?>]"
+                           value="approve"
+                           id="approve_<?= $preference['preferenceId'] ?>]"
+                           autocomplete="off">
+                    <label class="btn btn-outline-success" 
+                           for="approve_<?= $preference['preferenceId'] ?>]">Approve</label>
+
+                    <input type="radio" 
+                           class="btn-check"
+                           name="preference_action[<?= $preference['preferenceId'] ?>]"
+                           value="reject"
+                           id="reject_<?= $preference['preferenceId'] ?>]"
+                           autocomplete="off">
+                    <label class="btn btn-outline-danger" 
+                           for="reject_<?= $preference['preferenceId'] ?>]">Reject</label>
+
+                    <input type="radio" 
+                           class="btn-check"
+                           name="preference_action[<?= $preference['preferenceId'] ?>]"
+                           value="reset"
+                           id="reset_<?= $preference['preferenceId'] ?>]"
+                           autocomplete="off">
+                    <label class="btn btn-outline-warning" 
+                           for="reset_<?= $preference['preferenceId'] ?>]">Reset</label>
                 </div>
             </td>
             <td>
-                <select name="department_allocation[<?= $preference['preferenceId'] ?>]" 
-                        id="department_allocation_<?= $preference['preferenceId'] ?>" 
-                        class="form-select" disabled>
-                    <option value="" disabled selected>Select Allocation</option>
-                    <option value="MGMT">MGMT</option>
-                    <option value="GOVT">GOVT</option>
+                <select name="department_allocation[<?= $preference['preferenceId'] ?>]"
+                        class="form-select allocation-select"
+                        <?= $preference['preferenceStatus'] === 'success' ? '' : 'disabled' ?>>
+                    <option value="">Select</option>
+                    <option value="MGMT" <?= ($preference['department_status'] ?? '') === 'MGMT' ? 'selected' : '' ?>>MGMT</option>
+                    <option value="GOVT" <?= ($preference['department_status'] ?? '') === 'GOVT' ? 'selected' : '' ?>>GOVT</option>
                 </select>
-                <p id="error_<?= $preference['preferenceId'] ?>" class="text-danger" style="display:none;">
-                    Department cannot be allocated for "Reject" or "Reset".
-                </p>
+            </td>
+            <td>
+                <input type="text" 
+                       name="status_message[<?= $preference['preferenceId'] ?>]"
+                       class="form-control reason-input"
+                       value="<?= htmlspecialchars($preference['status_message'] ?? '') ?>"
+                       <?= in_array($preference['preferenceStatus'], ['rejected', 'reset']) ? '' : 'disabled' ?>
+                       placeholder="Enter reason...">
             </td>
         </tr>
-    <?php endforeach; ?>
-</tbody>
-
-        </table>
+        <?php endforeach; ?>
+    </tbody>
+</table>
         <button type="submit" class="btn btn-primary">Submit</button>
     </form>
 </div>
 
 <script>
-document.querySelectorAll('.img-thumbnail').forEach(img => {
-    img.addEventListener('click', function() {
-        const modal = document.createElement('div');
-        modal.className = 'fullscreen-modal';
-        modal.innerHTML = `
-            <button class="close-btn">&times;</button>
-            <img src="${this.src}" alt="Full-Screen View">
-        `;
-        document.body.appendChild(modal);
-        modal.style.display = 'flex';
+document.addEventListener('DOMContentLoaded', function() {
+    // Handle radio button changes
+    document.querySelectorAll('input[type="radio"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            const row = this.closest('tr');
+            const allocationSelect = row.querySelector('.allocation-select');
+            const reasonInput = row.querySelector('.reason-input');
 
-        modal.querySelector('.close-btn').addEventListener('click', () => {
-            modal.remove();
+            if (this.value === 'approve') {
+                allocationSelect.disabled = false;
+                reasonInput.disabled = true;
+                reasonInput.value = '';
+                reasonInput.removeAttribute('required');
+                allocationSelect.setAttribute('required', 'true');
+            } else {
+                allocationSelect.disabled = true;
+                allocationSelect.value = '';
+                reasonInput.disabled = false;
+                reasonInput.setAttribute('required', 'true');
+            }
         });
+    });
 
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) modal.remove();
-        });
+    // Initialize form state
+    document.querySelectorAll('tr').forEach(row => {
+        const status = row.querySelector('.badge').textContent.toLowerCase();
+        if (status === 'success') {
+            row.querySelector('.allocation-select').disabled = false;
+            row.querySelector('.reason-input').disabled = true;
+        } else if (['rejected', 'reset'].includes(status)) {
+            row.querySelector('.reason-input').disabled = false;
+        }
     });
 });
-    document.addEventListener('DOMContentLoaded', function() {
-        <?php if (isset($_SESSION['action_message'])): ?>
-            Swal.fire({
-                icon: '<?= $_SESSION['action_status'] ?>',
-                title: '<?= $_SESSION['action_message'] ?>',
-                showConfirmButton: false,
-                timer: 1500
-            });
-            <?php unset($_SESSION['action_message'], $_SESSION['action_status']); ?>
-        <?php endif; ?>
-    });
-function updateDropdown(preferenceId, enable) {
-    const dropdown = document.getElementById(`department_allocation_${preferenceId}`);
-    const errorMessage = document.getElementById(`error_${preferenceId}`);
-
-    if (enable) {
-        dropdown.disabled = false;
-        errorMessage.style.display = "none";
-    } else {
-        dropdown.disabled = true;
-        errorMessage.style.display = "block";
-    }
-}
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 </body>
+</html>

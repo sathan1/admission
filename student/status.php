@@ -8,53 +8,51 @@ if (!isset($_SESSION['userId'])) {
 }
 
 $userId = $_SESSION['userId'];
+$showEditButtons = false;
+$statusMessage = "";
 
-// Initialize statuses
-$status = [
-    'student' => 'not-submitted',
-    'academic' => 'not-submitted',
-    'preferences' => 'not-submitted',
-    'documents' => 'not-submitted'
-];
-
-// 1. Check Student Details Status
-$stmt = $conn->prepare("SELECT COUNT(*) as count FROM studentdetails WHERE studentUserId = ?");
+// Fetch Student & Academic Details
+$stmt = $conn->prepare("SELECT s.*, a.*, p.status_message
+                      FROM studentdetails s
+                      LEFT JOIN academic a ON s.studentUserId = a.academicUserId
+                      LEFT JOIN preference p ON s.studentUserId = p.preferenceUserId
+                      WHERE s.studentUserId = ?");
 $stmt->bind_param("i", $userId);
 $stmt->execute();
 $result = $stmt->get_result();
-$status['student'] = ($result->fetch_assoc()['count'] > 0) ? 'submitted' : 'not-submitted';
 
-// 2. Check Academic Details Status
-$stmt = $conn->prepare("SELECT COUNT(*) as count FROM academic WHERE academicUserId = ?");
-$stmt->bind_param("i", $userId);
-$stmt->execute();
-$result = $stmt->get_result();
-$status['academic'] = ($result->fetch_assoc()['count'] > 0) ? 'submitted' : 'not-submitted';
-
-// 3. Check Preferences Status (using preferencestatus column)
-$stmt = $conn->prepare("SELECT preferencestatus FROM preference WHERE preferenceUserId = ?");
-$stmt->bind_param("i", $userId);
-$stmt->execute();
-$result = $stmt->get_result();
+$studentData = $academicData = [];
 if ($result->num_rows > 0) {
-    $status['preferences'] = $result->fetch_assoc()['preferencestatus'] ?? 'submitted';
+    $row = $result->fetch_assoc();
+    $studentData = $row;
+    $academicData = $row;
+    $statusMessage = $row['status_message'] ?? "";
 }
 
-// 4. Check Documents Status
-$stmt = $conn->prepare("SELECT COUNT(*) as count FROM document WHERE documentUserId = ?");
-$stmt->bind_param("i", $userId);
-$stmt->execute();
-$result = $stmt->get_result();
-$status['documents'] = ($result->fetch_assoc()['count'] > 0) ? 'submitted' : 'not-submitted';
+// Fetch Documents
+$docStmt = $conn->prepare("SELECT documentName FROM document WHERE documentUserId = ?");
+$docStmt->bind_param("i", $userId);
+$docStmt->execute();
+$docResult = $docStmt->get_result();
+$documents = $docResult->num_rows > 0 ? json_decode($docResult->fetch_assoc()['documentName'], true) ?? [] : [];
 
-// Status labels
-$statusLabels = [
-    'approved' => ['label' => 'Approved', 'color' => 'success'],
-    'rejected' => ['label' => 'Rejected', 'color' => 'danger'],
-    'reset' => ['label' => 'Pending Reset', 'color' => 'warning'],
-    'submitted' => ['label' => 'Under Review', 'color' => 'info'],
-    'not-submitted' => ['label' => 'Not Submitted', 'color' => 'secondary']
-];
+// Fetch Preferences
+$prefStmt = $conn->prepare("SELECT * FROM preference WHERE preferenceUserId = ? ORDER BY preferenceOrder");
+$prefStmt->bind_param("i", $userId);
+$prefStmt->execute();
+$prefResult = $prefStmt->get_result();
+
+$preferences = [];
+while ($pref = $prefResult->fetch_assoc()) {
+    $preferences[] = [
+        'order' => $pref['preferenceOrder'],
+        'department' => $pref['preferenceDepartment'],
+        'status' => $pref['preferenceStatus']
+    ];
+    if ($pref['preferenceStatus'] === 'reset') {
+        $showEditButtons = true;
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -62,173 +60,148 @@ $statusLabels = [
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Application Status</title>
+    <title>Student Profile</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
     <style>
-        .status-container {
-            max-width: 800px;
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --accent-color: #e74c3c;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+        }
+
+        .profile-container {
+            max-width: 1400px;
             margin: 2rem auto;
             background: white;
             border-radius: 15px;
-            box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }
 
-        .status-item {
-            padding: 1.5rem;
-            border-bottom: 1px solid #dee2e6;
-            transition: background-color 0.2s;
-        }
-
-        .status-item:last-child {
-            border-bottom: none;
-        }
-
-        .status-icon {
-            font-size: 1.5rem;
-            width: 40px;
+        .profile-header {
+            background: linear-gradient(135deg, var(--primary-color), #1a252f);
+            padding: 3rem 2rem;
+            position: relative;
+            color: white;
             text-align: center;
         }
 
-        .status-badge {
-            padding: 0.35rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            font-weight: 500;
+        .profile-photo {
+            width: 180px;
+            height: 180px;
+            border-radius: 50%;
+            border: 5px solid white;
+            object-fit: cover;
+            margin-top: -90px;
         }
 
-        .edit-btn {
-            padding: 0.25rem 1rem;
-            border-radius: 20px;
-            transition: all 0.2s;
+        .detail-card {
+            background: #ffffff;
+            padding: 1.5rem;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            transition: transform 0.2s;
         }
 
-        .status-details {
-            background: #f8f9fa;
-            border-radius: 8px;
+        .detail-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .status-message {
+            text-align: center;
             padding: 1rem;
-            margin-top: 1rem;
+            font-weight: bold;
+            border-radius: 5px;
+            margin-bottom: 1rem;
+        }
+
+        .status-success { background-color: var(--success-color); color: white; }
+        .status-warning { background-color: var(--warning-color); color: black; }
+        .status-error { background-color: var(--accent-color); color: white; }
+
+        @media (max-width: 768px) {
+            .profile-header {
+                padding: 2rem 1rem;
+            }
+            .profile-photo {
+                width: 120px;
+                height: 120px;
+                margin-top: -60px;
+            }
         }
     </style>
 </head>
 <body>
-    <?php include '../header_student.php'; ?>
 
-    <div class="status-container">
-        <div class="p-4 border-bottom">
-            <h2 class="mb-0">Application Status Overview</h2>
+<?php include '../header_student.php'; ?>
+
+<div class="container">
+    <div class="profile-container">
+        <!-- Profile Header -->
+        <div class="profile-header">
+            <?php if(isset($documents['photo'])): ?>
+                <img src="../documents/<?= htmlspecialchars($documents['photo']) ?>?t=<?= filemtime('../documents/' . $documents['photo']) ?>" 
+                     class="profile-photo" 
+                     alt="Profile Photo">
+            <?php endif; ?>
+            <h1 class="mt-3"><?= htmlspecialchars($studentData['studentFirstName'] ?? '') ?> <?= htmlspecialchars($studentData['studentLastName'] ?? '') ?></h1>
         </div>
 
-        <!-- Student Information -->
-        <div class="status-item">
-            <div class="d-flex align-items-center gap-3 mb-2">
-                <div class="status-icon">
-                    <?php if($status['student'] === 'submitted'): ?>
-                        <i class="bi bi-check-circle-fill text-success"></i>
-                    <?php else: ?>
-                        <i class="bi bi-x-circle-fill text-secondary"></i>
-                    <?php endif; ?>
-                </div>
-                <div class="flex-grow-1">
-                    <h5 class="mb-0">Personal Information</h5>
-                </div>
-                <?php if($status['student'] === 'not-submitted'): ?>
-                    <a href="edit_student.php" class="edit-btn btn btn-outline-primary">
-                        <i class="bi bi-pencil-square me-2"></i>Edit
-                    </a>
-                <?php endif; ?>
+        <!-- Status Message -->
+        <?php if ($statusMessage): ?>
+            <div class="status-message 
+                <?= strpos(strtolower($statusMessage), 'success') !== false ? 'status-success' : 
+                   (strpos(strtolower($statusMessage), 'rejected') !== false ? 'status-error' : 'status-warning') ?>">
+                <?= htmlspecialchars($statusMessage) ?>
             </div>
-            <div class="status-details">
-                <span class="status-badge bg-<?= $statusLabels[$status['student']]['color'] ?>">
-                    <?= $statusLabels[$status['student']]['label'] ?>
-                </span>
+        <?php endif; ?>
+
+        <!-- Personal Details -->
+        <div class="container mt-4">
+            <div class="row g-4">
+                <div class="col-md-6">
+                    <div class="detail-card">
+                        <h5>Personal Information</h5>
+                        <p><strong>Date of Birth:</strong> <?= htmlspecialchars($studentData['studentDateOfBirth'] ?? 'N/A') ?></p>
+                        <p><strong>Contact:</strong> <?= htmlspecialchars($studentData['studentPhoneNumber'] ?? 'N/A') ?></p>
+                        <p><strong>Gender:</strong> <?= htmlspecialchars($studentData['studentGender'] ?? 'N/A') ?></p>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="detail-card">
+                        <h5>Academic Information</h5>
+                        <p><strong>School:</strong> <?= htmlspecialchars($academicData['school_name'] ?? 'N/A') ?></p>
+                        <p><strong>Year of Passing:</strong> <?= htmlspecialchars($academicData['yearOfPassing'] ?? 'N/A') ?></p>
+                    </div>
+                </div>
             </div>
         </div>
-
-        <!-- Academic Details -->
-        <div class="status-item">
-            <div class="d-flex align-items-center gap-3 mb-2">
-                <div class="status-icon">
-                    <?php if($status['academic'] === 'submitted'): ?>
-                        <i class="bi bi-check-circle-fill text-success"></i>
-                    <?php else: ?>
-                        <i class="bi bi-x-circle-fill text-secondary"></i>
-                    <?php endif; ?>
-                </div>
-                <div class="flex-grow-1">
-                    <h5 class="mb-0">Academic Details</h5>
-                </div>
-                <?php if($status['academic'] === 'not-submitted'): ?>
-                    <a href="edit_academic.php" class="edit-btn btn btn-outline-primary">
-                        <i class="bi bi-pencil-square me-2"></i>Edit
-                    </a>
-                <?php endif; ?>
-            </div>
-            <div class="status-details">
-                <span class="status-badge bg-<?= $statusLabels[$status['academic']]['color'] ?>">
-                    <?= $statusLabels[$status['academic']]['label'] ?>
-                </span>
-            </div>
-        </div>
-
+        
         <!-- Preferences -->
-        <div class="status-item">
-            <div class="d-flex align-items-center gap-3 mb-2">
-                <div class="status-icon">
-                    <?php if($status['preferences'] === 'approved'): ?>
-                        <i class="bi bi-check-circle-fill text-success"></i>
-                    <?php elseif($status['preferences'] === 'rejected'): ?>
-                        <i class="bi bi-x-circle-fill text-danger"></i>
-                    <?php else: ?>
-                        <i class="bi bi-dash-circle-fill text-warning"></i>
-                    <?php endif; ?>
-                </div>
-                <div class="flex-grow-1">
-                    <h5 class="mb-0">Preferences</h5>
-                </div>
-                <?php if(in_array($status['preferences'], ['rejected', 'reset', 'not-submitted'])): ?>
-                    <a href="edit_preferences.php" class="edit-btn btn btn-outline-primary">
-                        <i class="bi bi-pencil-square me-2"></i>Edit
-                    </a>
-                <?php endif; ?>
-            </div>
-            <div class="status-details">
-                <span class="status-badge bg-<?= $statusLabels[$status['preferences']]['color'] ?>">
-                    <?= $statusLabels[$status['preferences']]['label'] ?>
-                </span>
-                <?php if($status['preferences'] === 'rejected'): ?>
-                    <p class="mt-2 mb-0 text-muted small">Please update your preferences based on the feedback.</p>
-                <?php endif; ?>
-            </div>
-        </div>
-
-        <!-- Documents -->
-        <div class="status-item">
-            <div class="d-flex align-items-center gap-3 mb-2">
-                <div class="status-icon">
-                    <?php if($status['documents'] === 'submitted'): ?>
-                        <i class="bi bi-check-circle-fill text-success"></i>
-                    <?php else: ?>
-                        <i class="bi bi-x-circle-fill text-secondary"></i>
-                    <?php endif; ?>
-                </div>
-                <div class="flex-grow-1">
-                    <h5 class="mb-0">Documents</h5>
-                </div>
-                <?php if($status['documents'] === 'not-submitted'): ?>
-                    <a href="edit_documents.php" class="edit-btn btn btn-outline-primary">
-                        <i class="bi bi-pencil-square me-2"></i>Edit
-                    </a>
-                <?php endif; ?>
-            </div>
-            <div class="status-details">
-                <span class="status-badge bg-<?= $statusLabels[$status['documents']]['color'] ?>">
-                    <?= $statusLabels[$status['documents']]['label'] ?>
-                </span>
+        <div class="container mt-4">
+            <div class="detail-card">
+                <h5>Preferences</h5>
+                <ul>
+                    <?php foreach ($preferences as $pref): ?>
+                        <li><?= htmlspecialchars($pref['department']) ?> (Priority: <?= $pref['order'] ?>) - 
+                            <strong class="<?= $pref['status'] === 'confirmed' ? 'text-success' : 'text-warning' ?>">
+                                <?= htmlspecialchars($pref['status']) ?>
+                            </strong>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
             </div>
         </div>
     </div>
+</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

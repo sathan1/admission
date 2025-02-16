@@ -82,20 +82,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $religion = $_POST['religion'];
         $motherTongue = $_POST['motherTongue'];
         $phone = $_POST['phone'];
-        $aadhaar = $_POST['aadhaar'];
-        $pan = $_POST['pan'];
-        $bankName = $_POST['bankName'];
-        $accountNumber = $_POST['accountNumber'];
-        $ifscCode = $_POST['ifscCode'];
 
         if (empty($caste) || (empty($otherCaste) && $caste === 'Others')) {
             $message = "Both caste and other caste fields are required.";
         } else {
             $query = "INSERT INTO studentdetails 
-                      (studentUserId, studentFirstName, studentLastName, studentFatherName, studentMotherName, studentDateOfBirth, studentGender, studentCaste, studentCaste_2, studentReligion, studentMotherTongue, studentPhoneNumber, studentAadhaar, studentPAN, studentBankName, studentAccountNumber, studentIFSC) 
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                      (studentUserId, studentFirstName, studentLastName, studentFatherName, studentMotherName, studentDateOfBirth, studentGender, studentCaste, studentCaste_2, studentReligion, studentMotherTongue, studentPhoneNumber) 
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             $stmt = $conn->prepare($query);
-            $stmt->bind_param("issssssssssssssss", $userId, $firstName, $lastName, $fatherName, $motherName, $dob, $gender, $caste, $otherCaste, $religion, $motherTongue, $phone, $aadhaar, $pan, $bankName, $accountNumber, $ifscCode);
+            $stmt->bind_param("isssssssssss", $userId, $firstName, $lastName, $fatherName, $motherName, $dob, $gender, $caste, $otherCaste, $religion, $motherTongue, $phone);
             if ($stmt->execute()) {
                 header("Location: forms.php?form=academic");
                 exit();
@@ -127,88 +122,120 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $message = "Error saving academic details.";
         }
-    } elseif ($formType === 'preference' && !$preferenceSubmitted) {
-        // Handle preference form submission
+
+    } elseif ($formType === 'preference' && !$prefernceSubmitted) {
+        // Retrieve the user's preferences (from form submission or existing logic)
         $department1 = $_POST['department1'] ?? null;
         $department2 = $_POST['department2'] ?? null;
-
+    
         if (!$department1 || !$department2 || $department1 === $department2) {
             $message = "Invalid department preferences. Both preferences must be different.";
             header("Location: forms.php?form=preference&error=" . urlencode($message));
             exit();
         }
-
-        $query = "INSERT INTO preference 
-                  (preferenceUserId, preferenceOrder, preferenceDepartment, preferenceStatus) 
-                  VALUES (?, ?, ?, 'pending')";
-        $stmt = $conn->prepare($query);
-
-        // Insert first preference
-        $order = 1;
-        $stmt->bind_param("iis", $userId, $order, $department1);
+    
+        // Check if preferences already exist for the user
+        $checkQuery = "SELECT preferenceId FROM preference WHERE preferenceUserId = ?";
+        $stmt = $conn->prepare($checkQuery);
+        $stmt->bind_param("i", $userId);
         $stmt->execute();
-
-        // Insert second preference
-        $order = 2;
-        $stmt->bind_param("iis", $userId, $order, $department2);
-        $stmt->execute();
-
+        $existingPreferences = $stmt->get_result();
+    
+        if ($existingPreferences->num_rows > 0) {
+            // Update existing preferences to 'pending'
+            while ($row = $existingPreferences->fetch_assoc()) {
+                $updateQuery = "UPDATE preference SET preferenceStatus = 'pending' WHERE preferenceId = ?";
+                $updateStmt = $conn->prepare($updateQuery);
+                $updateStmt->bind_param("i", $row['preferenceId']);
+                $updateStmt->execute();
+            }
+    
+            $message = "Preferences updated to 'pending' successfully.";
+        } else {
+            // Insert new preferences if they don't exist
+            $query = "INSERT INTO preference (preferenceUserId, preferenceOrder, preferenceDepartment, preferenceStatus) 
+                      VALUES (?, ?, ?, 'pending')";
+            $stmt = $conn->prepare($query);
+    
+            // Insert first preference
+            $order = 1;
+            $stmt->bind_param("iis", $userId, $order, $department1);
+            $stmt->execute();
+    
+            // Insert second preference
+            $order = 2;
+            $stmt->bind_param("iis", $userId, $order, $department2);
+            $stmt->execute();
+    
+            $message = "Preferences submitted successfully with status 'pending'.";
+        }
+    
         header("Location: forms.php?form=document");
         exit();
-    } elseif ($formType === 'document' && !$documentSubmitted) {
-        // Handle document upload form submission
-        $targetDir = "../documents/";
-        $documents = ['aadhaar', 'pan', 'marksheet', 'photo', 'certificate1', 'certificate2']; // 6 documents (3 required, 3 optional)
-        $uploadedFiles = [];
-        $message = "";
-
-        foreach ($documents as $docType) {
-            if (isset($_FILES[$docType]) && $_FILES[$docType]['error'] === 0) {
-                $fileName = $_FILES[$docType]['name'];
-                $fileTmpName = $_FILES[$docType]['tmp_name'];
-                $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-
-                $allowedExtensions = ['jpg', 'jpeg', 'png', 'pdf'];
-                if (!in_array($fileExtension, $allowedExtensions)) {
-                    $message .= "Invalid file type for $docType. Allowed types: JPG, JPEG, PNG, PDF.<br>";
-                    continue;
-                }
-
-                $newFileName = uniqid($docType . '_', true) . '.' . $fileExtension;
-                $targetFilePath = $targetDir . $newFileName;
-
-                if (!is_dir($targetDir)) {
-                    mkdir($targetDir, 0755, true);
-                }
-
-                if (move_uploaded_file($fileTmpName, $targetFilePath)) {
-                    $uploadedFiles[$docType] = $newFileName;
-                } else {
-                    $message .= "Error uploading $docType.<br>";
-                }
-            } elseif (in_array($docType, ['aadhaar', 'marksheet', 'photo'])) {
-                $message .= ucfirst($docType) . " file is missing.<br>";
-            }
-        }
-
-        if (count($uploadedFiles) >= 3) { // At least 3 required documents
-            $documentNames = json_encode($uploadedFiles);
-
-            $query = "INSERT INTO document (documentUserId, documentType, documentName) VALUES (?, 'documents', ?)";
-            $stmt = $conn->prepare($query);
-            $stmt->bind_param("is", $userId, $documentNames);
-
-            if ($stmt->execute()) {
-                $message = "Documents uploaded successfully.";
-                header("Location: forms.php?form=complete");
-                exit();
-            } else {
-                $message = "Error saving documents to the database.";
-            }
-        } else {
-            $message .= "Please upload all required files.";
-        }
     }
+    
+      elseif ($formType === 'document' && !$documentSubmitted) {
+          // Directory where files will be uploaded
+          $targetDir = "../documents/";
+      
+          // Array of required document types
+          $documents = ['aadhaar', 'marksheet', 'photo'];
+          $uploadedFiles = [];
+          $message = "";
+      
+          foreach ($documents as $docType) {
+              if (isset($_FILES[$docType]) && $_FILES[$docType]['error'] === 0) {
+                  // Get file details
+                  $fileName = $_FILES[$docType]['name'];
+                  $fileTmpName = $_FILES[$docType]['tmp_name'];
+                  $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+      
+                  // Validate allowed file extensions
+                  $allowedExtensions = ['jpg', 'jpeg', 'png', 'pdf'];
+                  if (!in_array($fileExtension, $allowedExtensions)) {
+                      $message .= "Invalid file type for $docType. Allowed types: JPG, JPEG, PNG, PDF.<br>";
+                      continue;
+                  }
+      
+                  // Generate a unique file name
+                  $newFileName = uniqid($docType . '_', true) . '.' . $fileExtension;
+                  $targetFilePath = $targetDir . $newFileName;
+      
+                  // Ensure the upload directory exists
+                  if (!is_dir($targetDir)) {
+                      mkdir($targetDir, 0755, true);
+                  }
+      
+                  // Move the uploaded file to the target directory
+                  if (move_uploaded_file($fileTmpName, $targetFilePath)) {
+                      $uploadedFiles[$docType] = $newFileName; // Store the uploaded file's name
+                  } else {
+                      $message .= "Error uploading $docType.<br>";
+                  }
+              } else {
+                  $message .= ucfirst($docType) . " file is missing.<br>";
+              }
+          }
+      
+          // Check if all required files are uploaded
+          if (count($uploadedFiles) === count($documents)) {
+              $documentNames = json_encode($uploadedFiles); // Encode file names as JSON for better handling
+      
+              $query = "INSERT INTO document (documentUserId, documentType, documentName) VALUES (?, 'documents', ?)";
+              $stmt = $conn->prepare($query);
+              $stmt->bind_param("is", $userId, $documentNames);
+      
+              if ($stmt->execute()) {
+                  $message = "Documents uploaded successfully.";
+                  header("Location: forms.php?form=complete");
+                  exit();
+              } else {
+                  $message = "Error saving documents to the database.";
+              }
+          } else {
+              $message .= "Please upload all required files.";
+          }
+      }
 }
 
 // Redirect if all forms are submitted
@@ -216,6 +243,7 @@ if ($detailsSubmitted && $academicSubmitted && $preferenceSubmitted && $document
     header("Location: status.php");
     exit();
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -223,357 +251,279 @@ if ($detailsSubmitted && $academicSubmitted && $preferenceSubmitted && $document
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Forms</title>
+    <link href="styles.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
-    <style>
-        body {
-            font-family: 'Poppins', sans-serif;
-            background-color: #f4f6f8;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            color: #333;
-        }
-
-        .container {
-            background: #ffffff;
-            border-radius: 10px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-            padding: 20px;
-            max-width: 600px;
-            width: 100%;
-        }
-
-        h2 {
-            text-align: center;
-            color: #2c3e50;
-            margin-bottom: 20px;
-            font-weight: 600;
-            letter-spacing: 1.5px;
-            line-height: 1.4;
-        }
-
-        h2 u {
-            text-decoration: none;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 5px;
-        }
-
-        .text-success {
-            font-size: 14px;
-            color: #28a745;
-            text-align: center;
-            margin-bottom: 15px;
-            font-weight: 500;
-        }
-
-        .form-label {
-            font-weight: 500;
-            color: #555;
-            font-size: 14px;
-            margin-bottom: 5px;
-        }
-
-        .form-control {
-            border-radius: 8px;
-            border: 1px solid #ccc;
-            padding: 8px 12px;
-            font-size: 13px;
-            transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-            width: 100%;
-        }
-
-        .form-control:focus {
-            border-color: #007bff;
-            box-shadow: 0 0 5px rgba(0, 123, 255, 0.2);
-            outline: none;
-        }
-
-        .btn-primary {
-            background-color: #007bff;
-            color: #ffffff;
-            padding: 8px 12px;
-            font-size: 14px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-            width: 100%;
-        }
-
-        .btn-primary:hover {
-            background-color: #0056b3;
-        }
-
-        .total-marks {
-            font-size: 14px;
-            font-weight: 500;
-            color: #333;
-            margin-top: 10px;
-            text-align: center;
-        }
-
-        input[type="file"] {
-            border: 1px solid #ccc;
-            padding: 6px;
-            font-size: 13px;
-            border-radius: 8px;
-        }
-
-        input[type="file"]:focus {
-            border: 1px solid #007bff;
-            box-shadow: 0 0 5px rgba(0, 123, 255, 0.2);
-            outline: none;
-        }
-
-        .go-back {
-            text-align: center;
-            margin-top: 15px;
-        }
-
-        .go-back a {
-            color: #007bff;
-            text-decoration: none;
-            font-weight: 500;
-        }
-
-        .go-back a:hover {
-            text-decoration: underline;
-        }
-    </style>
+    <script src="script.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
-    <div class="container mt-4">
-        <p class="text-success"><?= $message ?></p>
-        <?php if ($formType === 'details' && !$detailsSubmitted): ?>
-            <!-- Student Details Form -->
-            <form method="post">
-                <u><h2>Step - 1 Student Details</h2></u>
-                <div class="mb-3">
-                    <label for="firstName" class="form-label">First Name</label>
-                    <input type="text" name="firstName" id="firstName" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="lastName" class="form-label">Last Name</label>
-                    <input type="text" name="lastName" id="lastName" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="fatherName" class="form-label">Father's Name</label>
-                    <input type="text" name="fatherName" id="fatherName" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="motherName" class="form-label">Mother's Name</label>
-                    <input type="text" name="motherName" id="motherName" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="dob" class="form-label">Date of Birth</label>
-                    <input type="date" name="dob" id="dob" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="gender" class="form-label">Gender</label>
-                    <select name="gender" id="gender" class="form-control" required>
-                        <option value="Male">Male</option>
-                        <option value="Female">Female</option>
-                        <option value="Other">Other</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="caste" class="form-label">Caste</label>
-                    <select name="caste" id="caste" class="form-control" required>
-                        <option value="BC">BC - Backward Class</option>
-                        <option value="MBC">MBC - Most Backward Class</option>
-                        <option value="SC">SC - Scheduled Caste</option>
-                        <option value="ST">ST - Scheduled Tribe</option>
-                        <option value="OC">OC - Open Category</option>
-                        <option value="Others">Others</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="otherCaste" class="form-label">Other Caste (if applicable)</label>
-                    <input type="text" name="otherCaste" id="otherCaste" class="form-control">
-                </div>
-                <div class="mb-3">
-                    <label for="religion" class="form-label">Religion</label>
-                    <select name="religion" id="religion" class="form-control" required>
-                        <option value="Hindu">Hindu</option>
-                        <option value="Muslim">Muslim</option>
-                        <option value="Christian">Christian</option>
-                        <option value="Others">Others</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="motherTongue" class="form-label">Mother Tongue</label>
-                    <select name="motherTongue" id="motherTongue" class="form-control" required>
-                        <option value="Tamil">Tamil</option>
-                        <option value="Telugu">Telugu</option>
-                        <option value="Hindi">Hindi</option>
-                        <option value="Others">Others</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="phone" class="form-label">Phone Number</label>
-                    <input type="text" name="phone" id="phone" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="aadhaar" class="form-label">Aadhaar Number</label>
-                    <input type="text" name="aadhaar" id="aadhaar" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="pan" class="form-label">PAN Number</label>
-                    <input type="text" name="pan" id="pan" class="form-control">
-                </div>
-                <div class="mb-3">
-                    <label for="bankName" class="form-label">Bank Name</label>
-                    <input type="text" name="bankName" id="bankName" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="accountNumber" class="form-label">Account Number</label>
-                    <input type="text" name="accountNumber" id="accountNumber" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="ifscCode" class="form-label">IFSC Code</label>
-                    <input type="text" name="ifscCode" id="ifscCode" class="form-control" required>
-                </div>
-                <button type="submit" class="btn btn-primary">Submit</button>
-            </form>
-        <?php elseif ($formType === 'academic' && !$academicSubmitted): ?>
-            <!-- Academic Details Form -->
-            <form method="post">
-                <u><h2>Step - 2 Academic Details</h2></u>
-                <div class="mb-3">
-                    <label for="school_name" class="form-label">School Name</label>
-                    <input type="text" name="school_name" id="school_name" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="yearOfPassing" class="form-label">Year of Passing</label>
-                    <input type="number" name="yearOfPassing" id="yearOfPassing" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="tamil" class="form-label">Tamil Marks</label>
-                    <input type="number" name="tamil" id="tamil" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="english" class="form-label">English Marks</label>
-                    <input type="number" name="english" id="english" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="maths" class="form-label">Maths Marks</label>
-                    <input type="number" name="maths" id="maths" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="science" class="form-label">Science Marks</label>
-                    <input type="number" name="science" id="science" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="socialScience" class="form-label">Social Science Marks</label>
-                    <input type="number" name="socialScience" id="socialScience" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="otherLanguage" class="form-label">Other Language Marks</label>
-                    <input type="number" name="otherLanguage" id="otherLanguage" class="form-control">
-                </div>
-                <div class="total-marks" id="totalMarksDisplay">
-                    Total Marks: <span id="totalMarks">0</span>
-                </div>
-                <button type="submit" class="btn btn-primary">Submit</button>
-            </form>
-            <script>
-                // Calculate total marks
-                function calculateTotal() {
-                    const tamil = parseInt(document.getElementById("tamil").value) || 0;
-                    const english = parseInt(document.getElementById("english").value) || 0;
-                    const maths = parseInt(document.getElementById("maths").value) || 0;
-                    const science = parseInt(document.getElementById("science").value) || 0;
-                    const socialScience = parseInt(document.getElementById("socialScience").value) || 0;
-                    const otherLanguage = parseInt(document.getElementById("otherLanguage").value) || 0;
-                    const totalMarks = tamil + english + maths + science + socialScience + otherLanguage;
-                    document.getElementById("totalMarks").textContent = totalMarks;
-                }
+<?php
+include '../header.php';
+?>
 
-                // Attach event listeners
-                document.querySelectorAll('.form-control').forEach(input => {
-                    input.addEventListener("input", calculateTotal);
-                });
-            </script>
-        <?php elseif ($formType === 'preference' && !$preferenceSubmitted): ?>
-            <!-- Preference Form -->
-            <form method="post">
-                <u><h2>Step - 3 Department Preference</h2></u>
-                <div class="mb-3">
-                    <label for="department1" class="form-label">First Preference</label>
-                    <select name="department1" id="department1" class="form-control" required>
-                        <option value="">Select a Department</option>
-                        <option value="Civil Engineering">Civil Engineering</option>
-                        <option value="Mechanical Engineering">Mechanical Engineering</option>
-                        <option value="Electrical and Electronics Engineering">Electrical and Electronics Engineering</option>
-                        <option value="Computer Science Engineering">Computer Science Engineering</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="department2" class="form-label">Second Preference</label>
-                    <select name="department2" id="department2" class="form-control" required>
-                        <option value="">Select a Department</option>
-                        <option value="Civil Engineering">Civil Engineering</option>
-                        <option value="Mechanical Engineering">Mechanical Engineering</option>
-                        <option value="Electrical and Electronics Engineering">Electrical and Electronics Engineering</option>
-                        <option value="Computer Science Engineering">Computer Science Engineering</option>
-                    </select>
-                </div>
-                <button type="submit" class="btn btn-primary">Submit</button>
-            </form>
-            <script>
-                // Disable duplicate department selection
-                document.getElementById("department1").addEventListener("change", function () {
-                    const department2 = document.getElementById("department2");
-                    department2.querySelectorAll("option").forEach(option => {
-                        option.disabled = option.value === this.value;
-                    });
-                });
-
-                document.getElementById("department2").addEventListener("change", function () {
-                    const department1 = document.getElementById("department1");
-                    department1.querySelectorAll("option").forEach(option => {
-                        option.disabled = option.value === this.value;
-                    });
-                });
-            </script>
-        <?php elseif ($formType === 'document' && !$documentSubmitted): ?>
-            <!-- Document Upload Form -->
-            <form method="post" enctype="multipart/form-data">
-                <u><h2>Step - 4 Document Upload</h2></u>
-                <div class="mb-3">
-                    <label for="aadhaar" class="form-label">Aadhaar Card (Required)</label>
-                    <input type="file" name="aadhaar" id="aadhaar" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="pan" class="form-label">PAN Card (Optional)</label>
-                    <input type="file" name="pan" id="pan" class="form-control">
-                </div>
-                <div class="mb-3">
-                    <label for="marksheet" class="form-label">Marksheet (Required)</label>
-                    <input type="file" name="marksheet" id="marksheet" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="photo" class="form-label">Photo (Required)</label>
-                    <input type="file" name="photo" id="photo" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label for="certificate1" class="form-label">Certificate 1 (Optional)</label>
-                    <input type="file" name="certificate1" id="certificate1" class="form-control">
-                </div>
-                <div class="mb-3">
-                    <label for="certificate2" class="form-label">Certificate 2 (Optional)</label>
-                    <input type="file" name="certificate2" id="certificate2" class="form-control">
-                </div>
-                <button type="submit" class="btn btn-primary">Submit</button>
-            </form>
-        <?php endif; ?>
-        <div class="go-back">
-            <a href="forms.php?form=<?= $prevForm ?>">Go Back</a>
+<div class="container mt-4">
+    <p class="text-success"><?= $message ?></p>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+    <?php if ($formType === 'details' && !$detailsSubmitted): ?>
+        <!-- Student Details Form -->
+        <form method="post">
+        <u><h2>Step - 1 Student details</h2></u>
+            <div class="mb-3">
+                <label for="firstName" class="form-label">First Name</label>
+                <input type="text" name="firstName" id="firstName" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="lastName" class="form-label">Last Name</label>
+                <input type="text" name="lastName" id="lastName" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="fatherName" class="form-label">Father's Name</label>
+                <input type="text" name="fatherName" id="fatherName" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="motherName" class="form-label">Mother's Name</label>
+                <input type="text" name="motherName" id="motherName" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="dob" class="form-label">Date of Birth</label>
+                <input type="date" name="dob" id="dob" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="gender" class="form-label">Gender</label>
+                <select name="gender" id="gender" class="form-control" required>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+            <div class="mb-3">
+            <label for="community" class="form-label">Community</label>
+            <select name="caste" id="caste" class="form-control" required>
+                <option value="BC">BC - Backward Class</option>
+                <option value="MBC">MBC - Most Backward Class</option>
+                <option value="SC">SC - Scheduled Caste</option>
+                <option value="ST">ST - Scheduled Tribe</option>
+                <option value="OC">OC - Open Category</option>
+                <option value="BC(M)">BC(M) - Backward Class (Muslim)</option>
+                <option value="MBC(M)">MBC(M) - Most Backward Class (Muslim)</option>
+                <option value="BC(Christian)">BC(Christian) - Backward Class (Christian)</option>
+                <option value="MBC(Christian)">MBC(Christian) - Most Backward Class (Christian)</option>
+                <option value="Others">Others - Any other types</option>
+            </select>
         </div>
+        <div class="mb-3">
+            <label for="extraCaste" class="form-label">caste</label>
+            <input type="text" name="otherCaste" id="otherCaste" class="form-control">
+        </div>
+        <div class="mb-3">
+        <label for="religion" class="form-label">Religion</label>
+        <select name="religion" id="religion" class="form-control" required>
+            <option value="Hindu">Hindu</option>
+            <option value="Muslim">Muslim</option>
+            <option value="Christian">Christian</option>
+            <option value="Jain">Jain</option>
+            <option value="Sikh">Sikh</option>
+            <option value="Buddhist">Buddhist</option>
+            <option value="Others">Others</option>
+        </select>
     </div>
+    <div class="mb-3">
+        <label for="motherTongue" class="form-label">Mother Tongue</label>
+        <select name="motherTongue" id="motherTongue" class="form-control" required>
+            <option value="Tamil">Tamil</option>
+            <option value="Telugu">Telugu</option>
+            <option value="Kannada">Kannada</option>
+            <option value="Sowrashtra">Sowrashtra</option>
+            <option value="Malayalam">Malayalam</option>
+            <option value="Hindi">Hindi</option>
+            <option value="Urdu">Urdu</option>
+            <option value="Others">Others</option>
+        </select>
+    </div>
+
+            <div class="mb-3">
+                <label for="phone" class="form-label">Phone Number</label>
+                <input type="text" name="phone" id="phone" class="form-control" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Submit</button>
+        </form>
+    <?php elseif ($formType === 'academic' && !$academicSubmitted): ?>
+        <!-- Academic Details Form -->
+        <form method="post">
+        <u><h2>Step - 2 Academic details</h2></u>
+            <div class="mb-3">
+                <label for="school_name" class="form-label">School Name</label>
+                <input type="text" name="school_name" id="school_name" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="yearOfPassing" class="form-label">Year of Passing</label>
+                <input type="number" name="yearOfPassing" id="yearOfPassing" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="tamil" class="form-label">Tamil Marks</label>
+                <input type="number" name="tamil" id="tamil" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="english" class="form-label">English Marks</label>
+                <input type="number" name="english" id="english" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="maths" class="form-label">Maths Marks</label>
+                <input type="number" name="maths" id="maths" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="science" class="form-label">Science Marks</label>
+                <input type="number" name="science" id="science" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="socialScience" class="form-label">Social Science Marks</label>
+                <input type="number" name="socialScience" id="socialScience" class="form-control" required>
+            </div>
+            <div class="mb-3">
+                <label for="otherLanguage" class="form-label">Other Language Marks</label>
+                <input type="number" name="otherLanguage" id="otherLanguage" class="form-control">
+            </div>
+            <div class="total-marks" id="totalMarksDisplay">
+            Total Marks: <span id="totalMarks">0</span>
+            </div>
+            <button type="submit" class="btn btn-primary">Submit</button>
+        </form>
+        <script>
+    // Attach event listeners to each input field to trigger the total calculation
+    function calculateTotal() {
+        // Get all the subject marks values
+        var tamil = parseInt(document.getElementById("tamil").value) || 0;
+        var english = parseInt(document.getElementById("english").value) || 0;
+        var maths = parseInt(document.getElementById("maths").value) || 0;
+        var science = parseInt(document.getElementById("science").value) || 0;
+        var socialScience = parseInt(document.getElementById("socialScience").value) || 0;
+        var otherLanguage = parseInt(document.getElementById("otherLanguage").value) || 0;
+
+        // Calculate total marks
+        var totalMarks = tamil + english + maths + science + socialScience + otherLanguage;
+
+        // Update total marks in the display
+        document.getElementById("totalMarks").textContent = totalMarks;
+    }
+
+    // Event listeners to call calculateTotal whenever a value changes
+    document.getElementById("tamil").addEventListener("input", calculateTotal);
+    document.getElementById("english").addEventListener("input", calculateTotal);
+    document.getElementById("maths").addEventListener("input", calculateTotal);
+    document.getElementById("science").addEventListener("input", calculateTotal);
+    document.getElementById("socialScience").addEventListener("input", calculateTotal);
+    document.getElementById("otherLanguage").addEventListener("input", calculateTotal);
+</script>
+
+    <?php elseif ($formType === 'preference' && !$preferenceSubmitted): ?>
+             <!-- Preference Form -->
+             <form method="post">
+             <u><h2>Step - 3 Department preference</h2></u>
+            <div class="mb-3">
+                <label for="department1" class="form-label">First Preference</label>
+                <select name="department1" id="department1" class="form-control" required>
+                <option value="">Select a Department</option>
+                    <option value="Civil Engineering">Civil Engineering</option>
+                    <option value="Mechanical Engineering">Mechanical Engineering</option>
+                    <option value="Electrical and Electronics Engineering">Electrical and Electronics Engineering</option>
+                    <option value="Electrical and Communication Engineering">Electrical and Communication Engineering</option>
+                    <option value="Automobile Engineering">Automobile Engineering</option>
+                    <option value="Textile Technology">Textile Technology</option>
+                    <option value="Computer Technology">Computer Technology</option>
+                    <option value="Printing Technology">Printing Technology</option>
+                    <option value="Mechanical Engineering (R&AC)">Mechanical Engineering (R&AC)</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="department2" class="form-label">Second Preference</label>
+                <select name="department2" id="department2" class="form-control" required>
+                <option value="">Select a Department</option>
+                    <option value="Civil Engineering">Civil Engineering</option>
+                    <option value="Mechanical Engineering">Mechanical Engineering</option>
+                    <option value="Electrical and Electronics Engineering">Electrical and Electronics Engineering</option>
+                    <option value="Electrical and Communication Engineering">Electrical and Communication Engineering</option>
+                    <option value="Automobile Engineering">Automobile Engineering</option>
+                    <option value="Textile Technology">Textile Technology</option>
+                    <option value="Computer Technology">Computer Technology</option>
+                    <option value="Printing Technology">Printing Technology</option>
+                    <option value="Mechanical Engineering (R&AC)">Mechanical Engineering (R&AC)</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Submit</button>
+        </form>
+        <script>
+            function updateDepartments() {
+    var department1 = document.getElementById("department1").value;
+    var department2 = document.getElementById("department2").value;
+
+    // Reset all options to be enabled before applying new logic
+    var department2Options = document.getElementById("department2").options;
+    for (var i = 0; i < department2Options.length; i++) {
+        department2Options[i].disabled = false;
+        department2Options[i].classList.remove("faded");
+    }
+
+    // Disable the department selected in department 1
+    if (department1) {
+        for (var i = 0; i < department2Options.length; i++) {
+            if (department2Options[i].value === department1) {
+                department2Options[i].disabled = true;
+                department2Options[i].classList.add("faded");
+            }
+        }
+    }
+
+    // Disable the department selected in department 2 (if already selected)
+    if (department2) {
+        var department1Options = document.getElementById("department1").options;
+        for (var i = 0; i < department1Options.length; i++) {
+            if (department1Options[i].value === department2) {
+                department1Options[i].disabled = true;
+                department1Options[i].classList.add("faded");
+            }
+        }
+    }
+
+    // Prevent submission if both preferences are the same
+    var submitButton = document.querySelector('button[type="submit"]');
+    if (department1 && department2 && department1 === department2) {
+        submitButton.disabled = true;
+        alert("Department preferences must be different.");
+    } else {
+        submitButton.disabled = false;
+    }
+}
+
+// Attach the function to `department1` and `department2` onchange events
+document.getElementById("department1").addEventListener("change", updateDepartments);
+document.getElementById("department2").addEventListener("change", updateDepartments);
+
+// Call the function once when the page loads to ensure it's in the correct state
+window.onload = updateDepartments;
+</script>
+    <?php elseif ($formType === 'document' && !$documentSubmitted): ?>
+        <!-- Document Upload Form -->
+        <form method="post" enctype="multipart/form-data">
+        <u><h2>Step - 4 Document upload</h2></u>
+    <div class="mb-3">
+        <label for="aadhaar" class="form-label">Aadhaar Card</label>
+        <input type="file" name="aadhaar" id="aadhaar" class="form-control" required>
+    </div>
+    <div class="mb-3">
+        <label for="marksheet" class="form-label">Marksheet</label>
+        <input type="file" name="marksheet" id="marksheet" class="form-control" required>
+    </div>
+    <div class="mb-3">
+        <label for="photo" class="form-label">Photo</label>
+        <input type="file" name="photo" id="photo" class="form-control" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Submit</button>
+</form>
+
+    <?php endif; ?>
+</div>
 </body>
 </html>
