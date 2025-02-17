@@ -115,12 +115,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 WHERE preferenceId = ?";
             
             $stmt = $conn->prepare($updateQuery);
-            $stmt->bind_param("sssi", 
-                $preferenceStatus,
-                $preferenceStatus === 'success' ? $departmentAllocation : null,
-                $statusMessage,
-                $preferenceId
-            );
+          // Update database
+$updateQuery = "UPDATE preference SET 
+    preferenceStatus = ?, 
+    department_status = ?,
+    status_message = ?
+    WHERE preferenceId = ?";
+
+// Prepare the statement
+$stmt = $conn->prepare($updateQuery);
+
+// Assign values to variables
+$departmentStatus = ($preferenceStatus === 'success') ? $departmentAllocation : null;
+
+// Bind parameters
+$stmt->bind_param("sssi", 
+    $preferenceStatus,
+    $departmentStatus, // Use the variable instead of the ternary operator directly
+    $statusMessage,
+    $preferenceId
+);
+
+// Execute the statement
+if ($stmt->execute()) {
+    $anyUpdates = true;
+    // Send email
+    sendStatusEmail(
+        $student['userEmail'],
+        $student['studentFirstName'],
+        $student['studentLastName'],
+        $preferenceStatus,
+        $preference['preferenceDepartment'],
+        $departmentAllocation,
+        $statusMessage
+    );
+}
+$stmt->close();
             
             if ($stmt->execute()) {
                 $anyUpdates = true;
