@@ -7,63 +7,66 @@ if (!isset($_SESSION['userId'])) {
     exit();
 }
 
-// Fetch all departments
-$departmentQuery = "SELECT DISTINCT preferenceDepartment FROM preference";
+// Fetch all unique department names along with department_status (MGMT/GOVT)
+$departmentQuery = "SELECT DISTINCT preferenceDepartment, department_status FROM preference";
 $departmentResult = $conn->query($departmentQuery);
 $departments = [];
 while ($dept = $departmentResult->fetch_assoc()) {
-    $departments[] = $dept['preferenceDepartment'];
+    $departments[$dept['preferenceDepartment']][] = $dept['department_status'];
 }
 
 // Initialize table structure
 $tableData = [];
-foreach ($departments as $department) {
-    $tableData[$department] = [
-        'shift' => 'First',
-        'OC' => ['boys' => 0, 'girls' => 0],
-        'BC' => ['boys' => 0, 'girls' => 0],
-        'BCM' => ['boys' => 0, 'girls' => 0],
-        'MBC' => ['boys' => 0, 'girls' => 0],
-        'SCA' => ['boys' => 0, 'girls' => 0],
-        'SC' => ['boys' => 0, 'girls' => 0],
-        'ST' => ['boys' => 0, 'girls' => 0],
-        'total' => ['boys' => 0, 'girls' => 0],
-    ];
+foreach ($departments as $department => $statuses) {
+    foreach ($statuses as $status) {
+        $tableData[$department][$status] = [
+            'shift' => 'First',
+            'OC' => ['boys' => 0, 'girls' => 0],
+            'BC' => ['boys' => 0, 'girls' => 0],
+            'BCM' => ['boys' => 0, 'girls' => 0],
+            'MBC' => ['boys' => 0, 'girls' => 0],
+            'SCA' => ['boys' => 0, 'girls' => 0],
+            'SC' => ['boys' => 0, 'girls' => 0],
+            'ST' => ['boys' => 0, 'girls' => 0],
+            'total' => ['boys' => 0, 'girls' => 0],
+            'side_total' => 0,
+        ];
+    }
 }
 
 // Fetch student data
 $query = "
-SELECT p.preferenceDepartment, sd.studentGender, sd.studentCaste, COUNT(*) AS studentCount
+SELECT p.preferenceDepartment, p.department_status, sd.studentGender, sd.studentCaste, COUNT(*) AS studentCount
 FROM studentdetails sd
 LEFT JOIN preference p ON sd.studentUserId = p.preferenceUserId
 WHERE p.preferenceStatus = 'success'
-GROUP BY p.preferenceDepartment, sd.studentCaste, sd.studentGender
-";
+GROUP BY p.preferenceDepartment, p.department_status, sd.studentCaste, sd.studentGender";
 $result = $conn->query($query);
 
 // Populate table data
 while ($row = $result->fetch_assoc()) {
     $department = $row['preferenceDepartment'];
+    $status = $row['department_status']; // MGMT or GOVT
     $caste = $row['studentCaste'];
-    $gender = strtolower($row['studentGender']); // Convert to lowercase for consistency
+    $gender = strtolower($row['studentGender']);
     $count = $row['studentCount'];
 
-    // Map gender values to expected keys
     if ($gender === 'male' || $gender === 'm') {
         $gender = 'boys';
     } elseif ($gender === 'female' || $gender === 'f') {
         $gender = 'girls';
     } else {
-        continue; // Skip if gender is undefined or invalid
+        continue;
     }
 
-    if (isset($tableData[$department][$caste][$gender])) {
-        $tableData[$department][$caste][$gender] += $count;
-        $tableData[$department]['total'][$gender] += $count;
+    if (isset($tableData[$department][$status][$caste][$gender])) {
+        $tableData[$department][$status][$caste][$gender] += $count;
+        $tableData[$department][$status]['total'][$gender] += $count;
+        $tableData[$department][$status]['side_total'] += $count;
     }
 }
 
-// Initialize totals for the bottom row
+// Initialize totals for bottom row
 $totals = [
     'OC' => ['boys' => 0, 'girls' => 0],
     'BC' => ['boys' => 0, 'girls' => 0],
@@ -73,21 +76,23 @@ $totals = [
     'SC' => ['boys' => 0, 'girls' => 0],
     'ST' => ['boys' => 0, 'girls' => 0],
     'total' => ['boys' => 0, 'girls' => 0],
+    'side_total' => 0,
 ];
 
-// Calculate totals across all departments
-foreach ($tableData as $data) {
-    foreach ($data as $key => $values) {
-        if (is_array($values)) {
-            $totals[$key]['boys'] += $values['boys'];
-            $totals[$key]['girls'] += $values['girls'];
+// Calculate totals
+foreach ($tableData as $department => $statusData) {
+    foreach ($statusData as $status => $data) {
+        foreach ($data as $key => $values) {
+            if (is_array($values)) {
+                $totals[$key]['boys'] += $values['boys'];
+                $totals[$key]['girls'] += $values['girls'];
+            }
         }
+        $totals['side_total'] += $data['side_total'];
     }
 }
 
 // Generate HTML table
-?>
-<
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -95,10 +100,7 @@ foreach ($tableData as $data) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Form C</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-       
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">         
 <style>
       
       /* General Reset */
@@ -335,7 +337,10 @@ foreach ($tableData as $data) {
          padding: 10px 15px;
      }
  }
-</style>
+ </style>
+</head>
+<body>
+
 <?php include '../header_admin.php'; ?>
 
 <!-- Sidebar for larger screens -->
@@ -367,87 +372,77 @@ foreach ($tableData as $data) {
         <a href="form_e.php" class="text-white">Form E</a>
     </nav>
 </div>
+
 <div class="content">
     <div class="container mt-4">
     <h2 class="text-center">NPTC</h2>
-    <p class="text-center"> GIRLS BOYS STATISTICS - ADMITTED</p>
-    <p class="text-center">Form C</p>
+    <p class="text-center">GIRLS BOYS STATISTICS - ADMITTED (MOTHER TONGUE)</p>
+    <p class="text-center">Form D</p>
     <h4 class="text-center">Admission to First Year Diploma Courses (2024-2025)</h4>
+    
     <table class="table table-bordered">
         <thead class="thead-dark">
         <tr>
-            <th rowspan = 2 >S.No</th>
-            <th rowspan = 2 >Department</th>
-            <th rowspan = 2 >Shit</th>
-            <th colspan =2>OC </th>
-            <th  colspan =2>BC </th>
-            <th  colspan =2>BCM </th>
-            <th colspan =2>MBC</th>
-            <th colspan =2>SCA</th>
-            <th colspan =2>SC</th>
-            <th colspan =2>STST</th>
-            <th colspan =2>Total </th>
+            <th rowspan=2>S.No</th>
+            <th rowspan=2>Department</th>
+            <th rowspan=2>Type</th>
+            <th rowspan=2>Shift</th>
+            <th colspan=2>OC</th>
+            <th colspan=2>BC</th>
+            <th colspan=2>BCM</th>
+            <th colspan=2>MBC</th>
+            <th colspan=2>SCA</th>
+            <th colspan=2>SC</th>
+            <th colspan=2>ST</th>
+            <th colspan=2>Total</th>
+            <th rowspan=2>Overall Total</th>
         </tr>
         <tr>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
+            <th>(B)</th><th>(G)</th>
+            <th>(B)</th><th>(G)</th>
+            <th>(B)</th><th>(G)</th>
+            <th>(B)</th><th>(G)</th>
+            <th>(B)</th><th>(G)</th>
+            <th>(B)</th><th>(G)</th>
+            <th>(B)</th><th>(G)</th>
+            <th>(B)</th><th>(G)</th>
         </tr>
         </thead>
         <tbody>
         <?php
         $serialNumber = 1;
-        foreach ($tableData as $department => $data) {
-            echo "<tr>";
-            echo "<td>{$serialNumber}</td>";
-            echo "<td>{$department}</td>";
-            echo "<td>{$data['shift']}</td>";
-            echo "<td>{$data['OC']['boys']}</td>";
-            echo "<td>{$data['OC']['girls']}</td>";
-            echo "<td>{$data['BC']['boys']}</td>";
-            echo "<td>{$data['BC']['girls']}</td>";
-            echo "<td>{$data['BCM']['boys']}</td>";
-            echo "<td>{$data['BCM']['girls']}</td>";
-            echo "<td>{$data['MBC']['boys']}</td>";
-            echo "<td>{$data['MBC']['girls']}</td>";
-            echo "<td>{$data['SCA']['boys']}</td>";
-            echo "<td>{$data['SCA']['girls']}</td>";
-            echo "<td>{$data['SC']['boys']}</td>";
-            echo "<td>{$data['SC']['girls']}</td>";
-            echo "<td>{$data['ST']['boys']}</td>";
-            echo "<td>{$data['ST']['girls']}</td>";
-            echo "<td>{$data['total']['boys']}</td>";
-            echo "<td>{$data['total']['girls']}</td>";
-            echo "</tr>";
-            $serialNumber++;
+        foreach ($tableData as $department => $statusData) {
+            foreach ($statusData as $status => $data) {
+                echo "<tr>";
+                echo "<td>{$serialNumber}</td>";
+                echo "<td>{$department}</td>";
+                echo "<td>{$status}</td>";
+                echo "<td>{$data['shift']}</td>";
+                foreach (['OC', 'BC', 'BCM', 'MBC', 'SCA', 'SC', 'ST', 'total'] as $category) {
+                    echo "<td>{$data[$category]['boys']}</td>";
+                    echo "<td>{$data[$category]['girls']}</td>";
+                }
+                echo "<td>{$data['side_total']}</td>";
+                echo "</tr>";
+                $serialNumber++;
+            }
         }
         ?>
         <!-- Totals Row -->
-        <tr class="table-primary">
-            <td colspan="3" class="text-center"><strong>Total</strong></td>
-            <?php
-            foreach ($totals as $key => $values) {
-                echo "<td>{$values['boys']}</td>";
-                echo "<td>{$values['girls']}</td>";
-            }
-            ?>
-        </tr>
+<tr class="table-primary">
+    <td colspan="4" class="text-center"><strong>Total</strong></td>
+    <?php
+    foreach (['OC', 'BC', 'BCM', 'MBC', 'SCA', 'SC', 'ST', 'total'] as $category) {
+        echo "<td><strong>{$totals[$category]['boys']}</strong></td>";
+        echo "<td><strong>{$totals[$category]['girls']}</strong></td>";
+    }
+    ?>
+    <td><strong><?= $totals['side_total']; ?></strong></td>
+</tr>
+
         </tbody>
     </table>
-            </div>
+    </div>
 </div>
 </body>
 </html>

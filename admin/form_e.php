@@ -7,64 +7,68 @@ if (!isset($_SESSION['userId'])) {
     exit();
 }
 
-// Fetch all departments
-$departmentQuery = "SELECT DISTINCT preferenceDepartment FROM preference";
+// Fetch all departments with status (MGMT/GOVT)
+$departmentQuery = "SELECT DISTINCT preferenceDepartment, department_status FROM preference";
 $departmentResult = $conn->query($departmentQuery);
 $departments = [];
 while ($dept = $departmentResult->fetch_assoc()) {
-    $departments[] = $dept['preferenceDepartment'];
+    $departments[$dept['preferenceDepartment']][] = $dept['department_status'];
 }
 
 // Initialize table structure
 $tableData = [];
-foreach ($departments as $department) {
-    $tableData[$department] = [
-        'shift' => 'First',
-        'Hindu' => ['boys' => 0, 'girls' => 0],
-        'Muslim' => ['boys' => 0, 'girls' => 0],
-        'Christian' => ['boys' => 0, 'girls' => 0],
-        'Jain' => ['boys' => 0, 'girls' => 0],
-        'Sikh' => ['boys' => 0, 'girls' => 0],
-        'Buddhist' => ['boys' => 0, 'girls' => 0],
-        'Others' => ['boys' => 0, 'girls' => 0],
-        'total' => ['boys' => 0, 'girls' => 0],
-    ];
+foreach ($departments as $deptName => $statuses) {
+    foreach ($statuses as $status) {
+        $tableData[$deptName][$status] = [
+            'shift' => 'First',
+            'Hindu' => ['boys' => 0, 'girls' => 0],
+            'Muslim' => ['boys' => 0, 'girls' => 0],
+            'Christian' => ['boys' => 0, 'girls' => 0],
+            'Jain' => ['boys' => 0, 'girls' => 0],
+            'Sikh' => ['boys' => 0, 'girls' => 0],
+            'Buddhist' => ['boys' => 0, 'girls' => 0],
+            'Others' => ['boys' => 0, 'girls' => 0],
+            'total' => ['boys' => 0, 'girls' => 0],
+            'side_total' => 0,
+        ];
+    }
 }
 
 // Fetch student data grouped by religion
 $query = "
-SELECT p.preferenceDepartment, sd.studentGender, sd.studentReligion, COUNT(*) AS studentCount
+SELECT p.preferenceDepartment, p.department_status, 
+       sd.studentGender, sd.studentReligion, COUNT(*) AS studentCount
 FROM studentdetails sd
 LEFT JOIN preference p ON sd.studentUserId = p.preferenceUserId
 WHERE p.preferenceStatus = 'success'
-GROUP BY p.preferenceDepartment, sd.studentReligion, sd.studentGender
+GROUP BY p.preferenceDepartment, p.department_status, sd.studentReligion, sd.studentGender
 ";
 $result = $conn->query($query);
 
 // Populate table data
 while ($row = $result->fetch_assoc()) {
     $department = $row['preferenceDepartment'];
+    $status = $row['department_status']; // MGMT or GOVT
     $religion = $row['studentReligion'];
-    $gender = strtolower($row['studentGender']); // Convert to lowercase for consistency
+    $gender = strtolower($row['studentGender']);
     $count = $row['studentCount'];
 
-    // Map gender values to expected keys
-    if ($gender === 'male' || $gender === 'm') {
-        $gender = 'boys';
-    } elseif ($gender === 'female' || $gender === 'f') {
-        $gender = 'girls';
-    } else {
-        continue; // Skip invalid gender values
+    // Normalize gender values
+    $gender = ($gender === 'male' || $gender === 'm') ? 'boys' : 'girls';
+
+    // Handle religion categories
+    if (!isset($tableData[$department][$status][$religion])) {
+        $religion = 'Others';
     }
 
-    // Add counts to the table data
-    if (isset($tableData[$department][$religion][$gender])) {
-        $tableData[$department][$religion][$gender] += $count;
-        $tableData[$department]['total'][$gender] += $count;
+    if (isset($tableData[$department][$status])) {
+        $tableData[$department][$status][$religion][$gender] += $count;
+        $tableData[$department][$status]['total'][$gender] += $count;
+        $tableData[$department][$status]['side_total'] += $count;
     }
 }
 
-// Calculate overall totals (for the bottom row)
+// Initialize totals
 $overallTotals = [
     'Hindu' => ['boys' => 0, 'girls' => 0],
     'Muslim' => ['boys' => 0, 'girls' => 0],
@@ -74,28 +78,30 @@ $overallTotals = [
     'Buddhist' => ['boys' => 0, 'girls' => 0],
     'Others' => ['boys' => 0, 'girls' => 0],
     'total' => ['boys' => 0, 'girls' => 0],
+    'side_total' => 0,
 ];
-foreach ($tableData as $data) {
-    foreach ($data as $key => $values) {
-        if (isset($overallTotals[$key])) {
-            $overallTotals[$key]['boys'] += $values['boys'];
-            $overallTotals[$key]['girls'] += $values['girls'];
+
+// Calculate totals
+foreach ($tableData as $deptData) {
+    foreach ($deptData as $statusData) {
+        foreach ($statusData as $category => $values) {
+            if (is_array($values)) {
+                $overallTotals[$category]['boys'] += $values['boys'];
+                $overallTotals[$category]['girls'] += $values['girls'];
+            }
         }
+        $overallTotals['side_total'] += $statusData['side_total'];
     }
 }
-
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Form E</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-       
-<style>
+      <style>
       
       /* General Reset */
  body {
@@ -331,10 +337,12 @@ foreach ($tableData as $data) {
          padding: 10px 15px;
      }
  }
-</style>
-<?php include '../header_admin.php'; ?>
-<!-- Sidebar for larger screens -->
-<nav class="sidebar d-none d-md-block">
+ </style>
+</head>
+<body>
+    <?php include '../header_admin.php'; ?>
+
+    <nav class="sidebar d-none d-md-block">
     <h4 class="text-center mt-3">Student Forms</h4>
     <a href="dashboard.php">Dashboard</a>
     <a href="form_a.php">Form A</a>
@@ -343,115 +351,69 @@ foreach ($tableData as $data) {
     <a href="form_d.php">Form D</a>
     <a href="form_e.php">Form E</a>
 </nav>
-
-<!-- Mobile menu toggle button -->
-<div class="mobile-menu-btn d-md-none p-2 bg-dark text-white text-center">
-    <button class="btn btn-light" type="button" data-bs-toggle="collapse" data-bs-target="#mobileMenu" aria-expanded="false" aria-controls="mobileMenu">
-        Menu
-    </button>
-</div>
-
-<!-- Mobile menu -->
-<div class="collapse d-md-none" id="mobileMenu">
-    <nav class="bg-dark">
-        <a href="dashboard.php" class="text-white">Dashboard</a>
-        <a href="form_a.php" class="text-white">Form A</a>
-        <a href="form_b.php" class="text-white">Form B</a>
-        <a href="form_c.php" class="text-white">Form C</a>
-        <a href="form_d.php" class="text-white">Form D</a>
-        <a href="form_e.php" class="text-white">Form E</a>
-    </nav>
-</div>
 <div class="content">
-<h2 class="text-center">NPTC</h2>
-    <p class="text-center"> GIRLS BOYS STATISTICS - ADMITTED(Community)</p>
-    <p class="text-center">Form E</p>
-    <h4 class="text-center">Admission to First Year Diploma Courses (2024-2025)</h4>
-<table class="table table-bordered">
-        <thead class="thead-dark">
-
-        <tr>
-            <th rowspan = 2 >S.No</th>
-            <th rowspan = 2 >Department</th>
-            <th rowspan = 2 >Shit</th>
-            <th colspan =2>Hindu </th>
-            <th  colspan =2>Muslim </th>
-            <th  colspan =2>Christian </th>
-            <th colspan =2>Jain</th>
-            <th colspan =2>Sikh</th>
-            <th colspan =2>Buddhist</th>
-            <th colspan =2>Others</th>
-            <th colspan =2>Total </th>
-        </tr>
-        <tr>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        </tr>
-        </thead>
-        <tbody>
-        <?php
-        $serialNumber = 1;
-        foreach ($tableData as $department => $data) {
-            echo "<tr>";
-            echo "<td>{$serialNumber}</td>";
-            echo "<td>{$department}</td>";
-            echo "<td>{$data['shift']}</td>";
-            echo "<td>{$data['Hindu']['boys']}</td>";
-            echo "<td>{$data['Hindu']['girls']}</td>";
-            echo "<td>{$data['Muslim']['boys']}</td>";
-            echo "<td>{$data['Muslim']['girls']}</td>";
-            echo "<td>{$data['Christian']['boys']}</td>";
-            echo "<td>{$data['Christian']['girls']}</td>";
-            echo "<td>{$data['Jain']['boys']}</td>";
-            echo "<td>{$data['Jain']['girls']}</td>";
-            echo "<td>{$data['Sikh']['boys']}</td>";
-            echo "<td>{$data['Sikh']['girls']}</td>";
-            echo "<td>{$data['Buddhist']['boys']}</td>";
-            echo "<td>{$data['Buddhist']['girls']}</td>";
-            echo "<td>{$data['Others']['boys']}</td>";
-            echo "<td>{$data['Others']['girls']}</td>";
-            echo "<td>{$data['total']['boys']}</td>";
-            echo "<td>{$data['total']['girls']}</td>";
-            echo "</tr>";
-            $serialNumber++;
-        }
-        ?>
-        <!-- Total row -->
-        <tr class="table-success">
-            <td colspan="3">Overall Totals</td>
-            <td><?= $overallTotals['Hindu']['boys'] ?></td>
-            <td><?= $overallTotals['Hindu']['girls'] ?></td>
-            <td><?= $overallTotals['Muslim']['boys'] ?></td>
-            <td><?= $overallTotals['Muslim']['girls'] ?></td>
-            <td><?= $overallTotals['Christian']['boys'] ?></td>
-            <td><?= $overallTotals['Christian']['girls'] ?></td>
-            <td><?= $overallTotals['Jain']['boys'] ?></td>
-            <td><?= $overallTotals['Jain']['girls'] ?></td>
-            <td><?= $overallTotals['Sikh']['boys'] ?></td>
-            <td><?= $overallTotals['Sikh']['girls'] ?></td>
-            <td><?= $overallTotals['Buddhist']['boys'] ?></td>
-            <td><?= $overallTotals['Buddhist']['girls'] ?></td>
-            <td><?= $overallTotals['Others']['boys'] ?></td>
-            <td><?= $overallTotals['Others']['girls'] ?></td>
-            <td><?= $overallTotals['total']['boys'] ?></td>
-            <td><?= $overallTotals['total']['girls'] ?></td>
-        </tr>
-        </tbody>
-    </table>
-</div>
+    <div class="container mt-4">
+        <h2 class="text-center">NPTC</h2>
+        <h4 class="text-center">Admission Statistics - Religion (2024-2025)</h4>
+        
+        <table class="table table-bordered">
+            <thead class="thead-dark">
+                <tr>
+                    <th rowspan="2">S.No</th>
+                    <th rowspan="2">Department</th>
+                    <th rowspan="2">Type</th>
+                    <th rowspan="2">Shift</th>
+                    <th colspan="2">Hindu</th>
+                    <th colspan="2">Muslim</th>
+                    <th colspan="2">Christian</th>
+                    <th colspan="2">Jain</th>
+                    <th colspan="2">Sikh</th>
+                    <th colspan="2">Buddhist</th>
+                    <th colspan="2">Others</th>
+                    <th colspan="2">Total</th>
+                    <th rowspan="2">Overall Total</th>
+                </tr>
+                <tr>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                     <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php $serial = 1; ?>
+                <?php foreach ($tableData as $dept => $statuses): ?>
+                    <?php foreach ($statuses as $status => $data): ?>
+                        <tr>
+                            <td><?= $serial++ ?></td>
+                            <td><?= $dept ?></td>
+                            <td><?= $status ?></td>
+                            <td><?= $data['shift'] ?></td>
+                            <?php foreach (['Hindu', 'Muslim', 'Christian', 'Jain', 'Sikh', 'Buddhist', 'Others', 'total'] as $category): ?>
+                                <td><?= $data[$category]['boys'] ?></td>
+                                <td><?= $data[$category]['girls'] ?></td>
+                            <?php endforeach; ?>
+                            <td><?= $data['side_total'] ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endforeach; ?>
+                
+                <!-- Totals Row -->
+                <tr class="table-success">
+                    <td colspan="4" class="text-center"><strong>Total</strong></td>
+                    <?php foreach (['Hindu', 'Muslim', 'Christian', 'Jain', 'Sikh', 'Buddhist', 'Others', 'total'] as $category): ?>
+                        <td><strong><?= $overallTotals[$category]['boys'] ?></strong></td>
+                        <td><strong><?= $overallTotals[$category]['girls'] ?></strong></td>
+                    <?php endforeach; ?>
+                    <td><strong><?= $overallTotals['side_total'] ?></strong></td>
+                </tr>
+            </tbody>
+        </table>
+        </div>
+    </div>
 </body>
 </html>

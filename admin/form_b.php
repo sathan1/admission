@@ -9,12 +9,13 @@ if (!isset($_SESSION['userId'])) {
 
 $adminId = $_SESSION['userId'];
 
-// Fetch unique department names from the preference table
-$departmentQuery = "SELECT DISTINCT preferenceDepartment FROM preference";
+// Fetch unique department names with department_status
+$departmentQuery = "SELECT DISTINCT CONCAT(preferenceDepartment, ' (', department_status, ')') AS departmentFull 
+                    FROM preference";
 $departmentResult = $conn->query($departmentQuery);
 $departments = [];
 while ($dept = $departmentResult->fetch_assoc()) {
-    $departments[] = $dept['preferenceDepartment'];
+    $departments[] = $dept['departmentFull'];
 }
 
 // Get the selected department from the dropdown filter
@@ -22,16 +23,17 @@ $selectedDepartment = isset($_GET['department']) ? $_GET['department'] : 'All De
 
 // Fetch students based on the selected department
 $query = "
-SELECT sd.studentUserId, sd.studentFirstName, sd.studentLastName, sd.studentPhoneNumber, sd.studentGender, sd.studentCaste, sd.studentDateOfBirth,
-       a.school_name, a.yearOfPassing, a.tamilMarks, a.englishMarks, a.mathsMarks, a.scienceMarks, a.socialScienceMarks, a.otherLanguageMarks, a.totalMarks,
-       p.preferenceId, p.preferenceDepartment, p.preferenceStatus
+SELECT sd.studentUserId, sd.studentFirstName, sd.studentLastName, sd.studentPhoneNumber, sd.studentGender, 
+       sd.studentCaste, sd.studentDateOfBirth, a.school_name, a.yearOfPassing, a.tamilMarks, a.englishMarks, 
+       a.mathsMarks, a.scienceMarks, a.socialScienceMarks, a.otherLanguageMarks, a.totalMarks, 
+       p.preferenceId, p.preferenceDepartment, p.preferenceStatus, p.department_status
 FROM studentdetails sd
 LEFT JOIN academic a ON sd.studentUserId = a.academicUserId
 LEFT JOIN preference p ON sd.studentUserId = p.preferenceUserId
 WHERE p.preferenceStatus = 'success'";
 
 if ($selectedDepartment !== 'All Departments') {
-    $query .= " AND p.preferenceDepartment = ?";
+    $query .= " AND CONCAT(p.preferenceDepartment, ' (', p.department_status, ')') = ?";
 }
 $query .= " ORDER BY sd.studentUserId, p.preferenceOrder ASC LIMIT 30";
 
@@ -62,6 +64,8 @@ while ($row = $allUsersResult->fetch_assoc()) {
         'otherLanguageMarks' => $row['otherLanguageMarks'],
         'totalMarks' => $row['totalMarks'],
         'average' => $row['totalMarks'] / 5,
+        'department' => $row['preferenceDepartment'],
+        'allocated' => $row['department_status'],
         'status' => 'Admitted',
     ];
 }
@@ -73,9 +77,7 @@ while ($row = $allUsersResult->fetch_assoc()) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Form B</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-       
+            
 <style>
       
       /* General Reset */
@@ -312,7 +314,10 @@ while ($row = $allUsersResult->fetch_assoc()) {
          padding: 10px 15px;
      }
  }
-</style>
+ </style>
+</head>
+<body>
+
 <?php include '../header_admin.php'; ?>
 
 <!-- Sidebar for larger screens -->
@@ -399,6 +404,8 @@ while ($row = $allUsersResult->fetch_assoc()) {
                             <th>Other Marks</th>
                             <th>Total</th>
                             <th>Average</th>
+                            <th>Department</th>
+                            <th>Allocated</th>
                             <th>Status</th>
                         </tr>
                     </thead>
@@ -420,6 +427,8 @@ while ($row = $allUsersResult->fetch_assoc()) {
                                 <td><?= htmlspecialchars($row['otherLanguageMarks']) ?></td>
                                 <td><?= htmlspecialchars($row['totalMarks']) ?></td>
                                 <td><?= number_format($row['average'], 2) ?></td>
+                                <td><?= htmlspecialchars($row['department']) ?></td>
+                                <td><?= htmlspecialchars($row['allocated']) ?></td>
                                 <td><?= htmlspecialchars($row['status']) ?></td>
                             </tr>
                         <?php endforeach; ?>
@@ -427,7 +436,7 @@ while ($row = $allUsersResult->fetch_assoc()) {
                 </table>
             </div>
         <?php else: ?>
-            <p>No results found for the selected department.</p>
+            <p>No results found.</p>
         <?php endif; ?>
     </div>
 </div>

@@ -5,13 +5,13 @@ session_start();
 $message = "";
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'];
+    $email = $_POST['email'];  // Change 'username' to 'email'
     $password = $_POST['password'];
 
-    // Check if the user exists
-    $query = "SELECT * FROM users WHERE userName = ?";
+    // Check if the user exists by email
+    $query = "SELECT * FROM users WHERE userEmail = ?";  // Change 'userName' to 'userEmail'
     $stmt = $conn->prepare($query);
-    $stmt->bind_param("s", $username);
+    $stmt->bind_param("s", $email);  // Bind 'email' instead of 'username'
     $stmt->execute();
     $result = $stmt->get_result();
 
@@ -63,8 +63,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <h3>LOGIN</h3>
                 <p class="text-danger"><?= $message ?></p>
                 <form method="post" class='login-items'>
-                    <label for="username">Username</label>
-                    <input type="text" class='login' name="username" placeholder='Your username' required />
+                    <label for="email">Email</label>  <!-- Change 'username' to 'email' -->
+                    <input type="email" class='login' name="email" placeholder='Your email' required />  <!-- Change 'username' to 'email' -->
                     <label for="password">Password</label>
                     <input type="password" class='login' name="password" placeholder="Your Password" required />
                     <input type="submit" class='login-btn' value="Login" />

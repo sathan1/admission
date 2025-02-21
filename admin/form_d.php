@@ -7,67 +7,67 @@ if (!isset($_SESSION['userId'])) {
     exit();
 }
 
-// Fetch all departments
-$departmentQuery = "SELECT DISTINCT preferenceDepartment FROM preference";
+// Fetch departments with status
+$departmentQuery = "SELECT DISTINCT preferenceDepartment, department_status FROM preference";
 $departmentResult = $conn->query($departmentQuery);
 $departments = [];
 while ($dept = $departmentResult->fetch_assoc()) {
-    $departments[] = $dept['preferenceDepartment'];
+    $departments[$dept['preferenceDepartment']][] = $dept['department_status'];
 }
 
 // Initialize table structure
 $tableData = [];
-foreach ($departments as $department) {
-    $tableData[$department] = [
-        'shift' => 'First',
-        'Tamil' => ['boys' => 0, 'girls' => 0],
-        'Telugu' => ['boys' => 0, 'girls' => 0],
-        'Kannada' => ['boys' => 0, 'girls' => 0],
-        'Sowrashtra' => ['boys' => 0, 'girls' => 0],
-        'Malayalam' => ['boys' => 0, 'girls' => 0],
-        'Hindi' => ['boys' => 0, 'girls' => 0],
-        'Urdu' => ['boys' => 0, 'girls' => 0],
-        'Others' => ['boys' => 0, 'girls' => 0],
-        'total' => ['boys' => 0, 'girls' => 0],
-    ];
+foreach ($departments as $deptName => $statuses) {
+    foreach ($statuses as $status) {
+        $tableData[$deptName][$status] = [
+            'shift' => 'First',
+            'Tamil' => ['boys' => 0, 'girls' => 0],
+            'Telugu' => ['boys' => 0, 'girls' => 0],
+            'Kannada' => ['boys' => 0, 'girls' => 0],
+            'Sowrashtra' => ['boys' => 0, 'girls' => 0],
+            'Malayalam' => ['boys' => 0, 'girls' => 0],
+            'Hindi' => ['boys' => 0, 'girls' => 0],
+            'Urdu' => ['boys' => 0, 'girls' => 0],
+            'Others' => ['boys' => 0, 'girls' => 0],
+            'total' => ['boys' => 0, 'girls' => 0],
+            'side_total' => 0,
+        ];
+    }
 }
 
 // Fetch student data
-$query = "
-SELECT p.preferenceDepartment, sd.studentGender, sd.studentMotherTongue, COUNT(*) AS studentCount
-FROM studentdetails sd
-LEFT JOIN preference p ON sd.studentUserId = p.preferenceUserId
-WHERE p.preferenceStatus = 'success'
-GROUP BY p.preferenceDepartment, sd.studentMotherTongue, sd.studentGender
-";
+$query = "SELECT p.preferenceDepartment, p.department_status, 
+          sd.studentGender, sd.studentMotherTongue, COUNT(*) AS studentCount
+          FROM studentdetails sd
+          LEFT JOIN preference p ON sd.studentUserId = p.preferenceUserId
+          WHERE p.preferenceStatus = 'success'
+          GROUP BY p.preferenceDepartment, p.department_status, sd.studentMotherTongue, sd.studentGender";
 $result = $conn->query($query);
 
 // Populate table data
 while ($row = $result->fetch_assoc()) {
     $department = $row['preferenceDepartment'];
+    $status = $row['department_status'];
     $motherTongue = $row['studentMotherTongue'];
-    $gender = strtolower($row['studentGender']); // Convert to lowercase for consistency
+    $gender = strtolower($row['studentGender']);
     $count = $row['studentCount'];
 
-    // Map gender values to expected keys
-    if ($gender === 'male' || $gender === 'm') {
-        $gender = 'boys';
-    } elseif ($gender === 'female' || $gender === 'f') {
-        $gender = 'girls';
-    } else {
-        continue; // Skip if gender is undefined or invalid
+    // Normalize gender values
+    $gender = ($gender === 'male' || $gender === 'm') ? 'boys' : 'girls';
+    
+    // Handle mother tongue categories
+    if (!isset($tableData[$department][$status][$motherTongue])) {
+        $motherTongue = 'Others';
     }
 
-    // Validate mother tongue
-    if (!isset($tableData[$department][$motherTongue])) {
-        $motherTongue = "Others";
+    if (isset($tableData[$department][$status])) {
+        $tableData[$department][$status][$motherTongue][$gender] += $count;
+        $tableData[$department][$status]['total'][$gender] += $count;
+        $tableData[$department][$status]['side_total'] += $count;
     }
-
-    $tableData[$department][$motherTongue][$gender] += $count;
-    $tableData[$department]['total'][$gender] += $count;
 }
 
-// Initialize totals for bottom row
+// Initialize totals
 $totals = [
     'Tamil' => ['boys' => 0, 'girls' => 0],
     'Telugu' => ['boys' => 0, 'girls' => 0],
@@ -78,31 +78,30 @@ $totals = [
     'Urdu' => ['boys' => 0, 'girls' => 0],
     'Others' => ['boys' => 0, 'girls' => 0],
     'total' => ['boys' => 0, 'girls' => 0],
+    'side_total' => 0,
 ];
 
-// Calculate totals across all departments
-foreach ($tableData as $data) {
-    foreach ($data as $key => $values) {
-        if (is_array($values)) {
-            $totals[$key]['boys'] += $values['boys'];
-            $totals[$key]['girls'] += $values['girls'];
+// Calculate totals
+foreach ($tableData as $deptData) {
+    foreach ($deptData as $statusData) {
+        foreach ($statusData as $category => $values) {
+            if (is_array($values)) {
+                $totals[$category]['boys'] += $values['boys'];
+                $totals[$category]['girls'] += $values['girls'];
+            }
         }
+        $totals['side_total'] += $statusData['side_total'];
     }
 }
-
-// Generate HTML table
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Form D</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-      
-<style>
+    <style>
       
       /* General Reset */
  body {
@@ -338,10 +337,11 @@ foreach ($tableData as $data) {
          padding: 10px 15px;
      }
  }
-</style>
-<?php include '../header_admin.php'; ?>
-
-<!-- Sidebar for larger screens -->
+ </style>
+</head>
+<body>
+    <?php include '../header_admin.php'; ?>
+!-- Sidebar for larger screens -->
 <nav class="sidebar d-none d-md-block">
     <h4 class="text-center mt-3">Student Forms</h4>
     <a href="dashboard.php">Dashboard</a>
@@ -351,111 +351,71 @@ foreach ($tableData as $data) {
     <a href="form_d.php">Form D</a>
     <a href="form_e.php">Form E</a>
 </nav>
-
-<!-- Mobile menu toggle button -->
-<div class="mobile-menu-btn d-md-none p-2 bg-dark text-white text-center">
-    <button class="btn btn-light" type="button" data-bs-toggle="collapse" data-bs-target="#mobileMenu" aria-expanded="false" aria-controls="mobileMenu">
-        Menu
-    </button>
-</div>
-
-<!-- Mobile menu -->
-<div class="collapse d-md-none" id="mobileMenu">
-    <nav class="bg-dark">
-        <a href="dashboard.php" class="text-white">Dashboard</a>
-        <a href="form_a.php" class="text-white">Form A</a>
-        <a href="form_b.php" class="text-white">Form B</a>
-        <a href="form_c.php" class="text-white">Form C</a>
-        <a href="form_d.php" class="text-white">Form D</a>
-        <a href="form_e.php" class="text-white">Form E</a>
-    </nav>
-</div>
 <div class="content">
     <div class="container mt-4">
-    <h2 class="text-center">NPTC</h2>
-    <p class="text-center"> GIRLS BOYS STATISTICS - ADMITTED(MOTHER TONGUE)</p>
-    <p class="text-center">Form D</p>
-    <h4 class="text-center">Admission to First Year Diploma Courses (2024-2025)</h4>
-    <table class="table table-bordered">
-        <thead class="thead-dark">
-        <tr>
-            <th rowspan = 2 >S.No</th>
-            <th rowspan = 2 >Department</th>
-            <th rowspan = 2 >Shit</th>
-            <th colspan =2>Tamil </th>
-            <th  colspan =2>Telugu </th>
-            <th  colspan =2>Kannada </th>
-            <th colspan =2>Sowrashtra</th>
-            <th colspan =2>Malayalam</th>
-            <th colspan =2>Hindi</th>
-            <th colspan =2>Urdu</th>
-            <th colspan =2>Others </th>
-            <th colspan =2>Total </th>
-        </tr>
-        <tr>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        <th> (B)</th>
-        <th> (G)</th>
-        </tr>
-        </thead>
-        <tbody>
-        <?php
-        $serialNumber = 1;
-        foreach ($tableData as $department => $data) {
-            echo "<tr>";
-            echo "<td>{$serialNumber}</td>";
-            echo "<td>{$department}</td>";
-            echo "<td>{$data['shift']}</td>";
-            echo "<td>{$data['Tamil']['boys']}</td>";
-            echo "<td>{$data['Tamil']['girls']}</td>";
-            echo "<td>{$data['Telugu']['boys']}</td>";
-            echo "<td>{$data['Telugu']['girls']}</td>";
-            echo "<td>{$data['Kannada']['boys']}</td>";
-            echo "<td>{$data['Kannada']['girls']}</td>";
-            echo "<td>{$data['Sowrashtra']['boys']}</td>";
-            echo "<td>{$data['Sowrashtra']['girls']}</td>";
-            echo "<td>{$data['Malayalam']['boys']}</td>";
-            echo "<td>{$data['Malayalam']['girls']}</td>";
-            echo "<td>{$data['Hindi']['boys']}</td>";
-            echo "<td>{$data['Hindi']['girls']}</td>";
-            echo "<td>{$data['Urdu']['boys']}</td>";
-            echo "<td>{$data['Urdu']['girls']}</td>";
-            echo "<td>{$data['Others']['boys']}</td>";
-            echo "<td>{$data['Others']['girls']}</td>";
-            echo "<td>{$data['total']['boys']}</td>";
-            echo "<td>{$data['total']['girls']}</td>";
-            echo "</tr>";
-            $serialNumber++;
-        }
-        ?>
-        <!-- Totals Row -->
-        <tr class="table-primary">
-            <td colspan="3" class="text-center"><strong>Total</strong></td>
-            <?php
-            foreach ($totals as $key => $values) {
-                echo "<td>{$values['boys']}</td>";
-                echo "<td>{$values['girls']}</td>";
-            }
-            ?>
-        </tr>
-        </tbody>
-    </table>
-            </div>
+        <h2 class="text-center">NPTC</h2>
+        <h4 class="text-center">Admission Statistics - Mother Tongue (2024-2025)</h4>
+        
+        <table class="table table-bordered">
+            <thead class="thead-dark">
+                <tr>
+                    <th rowspan="2">S.No</th>
+                    <th rowspan="2">Department</th>
+                    <th rowspan="2">Type</th>
+                    <th rowspan="2">Shift</th>
+                    <th colspan="2">Tamil</th>
+                    <th colspan="2">Telugu</th>
+                    <th colspan="2">Kannada</th>
+                    <th colspan="2">Sowrashtra</th>
+                    <th colspan="2">Malayalam</th>
+                    <th colspan="2">Hindi</th>
+                    <th colspan="2">Urdu</th>
+                    <th colspan="2">Others</th>
+                    <th colspan="2">Total</th>
+                    <th rowspan="2">Overall Total</th>
+                </tr>
+                <tr>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                    <th>B</th><th>G</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php $serial = 1; ?>
+                <?php foreach ($tableData as $dept => $statuses): ?>
+                    <?php foreach ($statuses as $status => $data): ?>
+                        <tr>
+                            <td><?= $serial++ ?></td>
+                            <td><?= $dept ?></td>
+                            <td><?= $status ?></td>
+                            <td><?= $data['shift'] ?></td>
+                            <?php foreach (['Tamil', 'Telugu', 'Kannada', 'Sowrashtra', 'Malayalam', 'Hindi', 'Urdu', 'Others', 'total'] as $category): ?>
+                                <td><?= $data[$category]['boys'] ?></td>
+                                <td><?= $data[$category]['girls'] ?></td>
+                            <?php endforeach; ?>
+                            <td><?= $data['side_total'] ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endforeach; ?>
+                
+                <!-- Totals Row -->
+                <tr class="table-primary">
+                    <td colspan="4" class="text-center"><strong>Total</strong></td>
+                    <?php foreach (['Tamil', 'Telugu', 'Kannada', 'Sowrashtra', 'Malayalam', 'Hindi', 'Urdu', 'Others', 'total'] as $category): ?>
+                        <td><strong><?= $totals[$category]['boys'] ?></strong></td>
+                        <td><strong><?= $totals[$category]['girls'] ?></strong></td>
+                    <?php endforeach; ?>
+                    <td><strong><?= $totals['side_total'] ?></strong></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
 </div>
 </body>
 </html>
