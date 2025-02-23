@@ -124,11 +124,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $conn->prepare($updateQuery);
             $stmt->bind_param("sssi", 
                 $preferenceStatus,
-                $departmentAllocation,
+                $preferenceStatus === 'success' ? $departmentAllocation : null,
                 $statusMessage,
                 $preferenceId
             );
-
+            
             if ($stmt->execute()) {
                 $anyUpdates = true;
 
